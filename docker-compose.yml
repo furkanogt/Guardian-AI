@@ -1,0 +1,49 @@
+version: '3.8'
+networks:
+  guardian-net:
+    driver: bridge
+    name: guardian-net
+    driver_opts:
+      com.docker.network.bridge.name: guardian-br0
+    ipam:
+      config:
+        - subnet: 192.168.100.0/24
+services:
+  target:
+    build: ./target
+    container_name: guardian-target
+    networks:
+      guardian-net:
+        ipv4_address: 192.168.100.10
+    ports:
+      - "8080:80"
+    cap_add:
+      - NET_ADMIN
+  sniffer:
+    build: ./sniffer
+    container_name: guardian-sniffer
+    networks:
+      - guardian-net
+    volumes:
+      - ./data:/data
+      - ./sniffer:/app
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    depends_on:
+      - target
+  dashboard:
+    build: ./dashboard
+    container_name: guardian-dashboard
+    network_mode: "host"
+    volumes:
+      - ./ml:/ml
+      - ./data:/data
+      - ./dashboard:/app
+    environment:
+      - GUARDIAN_IFACE=guardian-br0
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    depends_on:
+      - target

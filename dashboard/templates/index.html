@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<title>Guardian-AI Dashboard</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.6.1/socket.io.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0a0e1a; color: #e0e6f0; font-family: monospace; }
+  header { background: #0d1117; border-bottom: 1px solid #1e3a5f; padding: 16px 24px; display: flex; align-items: center; gap: 12px; }
+  header h1 { font-size: 18px; color: #58a6ff; }
+  .status-dot { width: 10px; height: 10px; border-radius: 50%; background: #3fb950; animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+  .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; padding: 24px 24px 0; }
+  .card { background: #0d1117; border: 1px solid #1e3a5f; border-radius: 8px; padding: 20px; }
+  .card h2 { font-size: 12px; color: #7d8590; margin-bottom: 8px; text-transform: uppercase; }
+  .card .value { font-size: 32px; font-weight: bold; color: #58a6ff; }
+  .card .value.danger { color: #f85149; }
+  .charts-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; padding: 16px 24px; }
+  .section { padding: 0 24px 16px; }
+  .section h2 { font-size: 14px; color: #7d8590; margin-bottom: 12px; text-transform: uppercase; }
+  .alert-item { background: #0d1117; border: 1px solid #3d1f1f; border-left: 3px solid #f85149; border-radius: 6px; padding: 10px 16px; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center; animation: fadeIn 0.3s ease; }
+  @keyframes fadeIn { from{opacity:0;transform:translateY(-8px)} to{opacity:1;transform:translateY(0)} }
+  .alert-ip { color: #f85149; font-weight: bold; }
+  .alert-time { color: #7d8590; font-size: 12px; }
+  .badge { padding: 2px 8px; border-radius: 4px; font-size: 11px; margin-left: 6px; }
+  .badge-ddos { background: #3d1f1f; color: #f85149; }
+  .badge-sqli { background: #1f2d3d; color: #58a6ff; }
+  .badge-xss { background: #2d1f3d; color: #a371f7; }
+  .badge-lfi { background: #1f3d2d; color: #3fb950; }
+  .badge-rce { background: #3d2d1f; color: #e3b341; }
+  .badge-ssrf { background: #1f3d3d; color: #39c5cf; }
+  .badge-default { background: #2d2d2d; color: #e0e6f0; }
+  canvas { max-height: 220px; }
+  .ip-table { width: 100%; border-collapse: collapse; }
+  .ip-table th { text-align: left; font-size: 11px; color: #7d8590; padding: 6px 8px; border-bottom: 1px solid #1e3a5f; }
+  .ip-table td { padding: 8px; font-size: 13px; border-bottom: 1px solid #1e3a5f; }
+  .ip-table tr:last-child td { border-bottom: none; }
+  .ip-rank { color: #7d8590; font-size: 11px; }
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 0 24px 16px; }
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<style>
+  #map { height: 300px; border-radius: 8px; }
+</style>
+</style>
+</head>
+<body>
+<header>
+  <div class="status-dot"></div>
+  <h1>Guardian-AI — Canlı İzleme</h1>
+  <a href="/api/export" style="margin-left:auto;background:#1e3a5f;color:#58a6ff;padding:6px 14px;border-radius:6px;text-decoration:none;font-size:12px">⬇ CSV Export</a> 
+</header>
+
+<div class="grid">
+  <div class="card">
+    <h2>Toplam Alert</h2>
+    <div class="value danger" id="alert-count">0</div>
+  </div>
+  <div class="card">
+    <h2>Banlı IP</h2>
+    <div class="value danger" id="banned-count">0</div>
+  </div>
+  <div class="card">
+    <h2>Engellenen Saldırı</h2>
+    <div class="value" id="blocked-count">0</div>
+  </div>
+  <div class="card">
+    <h2>Sistem Durumu</h2>
+    <div class="value" style="font-size:16px;margin-top:8px;color:#3fb950">● AKTİF</div>
+  </div>
+</div>
+
+<div class="charts-grid">
+  <div class="card">
+    <h2 style="font-size:12px;color:#7d8590;margin-bottom:12px;text-transform:uppercase">Paket/Sn Grafiği</h2>
+    <canvas id="trafficChart"></canvas>
+  </div>
+  <div class="card">
+    <h2 style="font-size:12px;color:#7d8590;margin-bottom:12px;text-transform:uppercase">Saldırı Türleri</h2>
+    <canvas id="attackChart"></canvas>
+  </div>
+</div>
+
+<div class="two-col">
+  <div class="card">
+    <h2 style="font-size:12px;color:#7d8590;margin-bottom:12px;text-transform:uppercase">En Çok Saldıran IP'ler</h2>
+    <table class="ip-table">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>IP Adresi</th>
+          <th>Saldırı Sayısı</th>
+          <th>Son Tür</th>
+        </tr>
+      </thead>
+      <tbody id="ip-table-body">
+        <tr><td colspan="4" style="color:#7d8590;text-align:center">Henüz saldırı yok</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2 style="font-size:12px;color:#7d8590;margin-bottom:12px;text-transform:uppercase">Son Alertler</h2>
+    <div id="alerts"></div>
+  </div>
+</div>
+
+<script>
+const socket = io();
+let pktCount = 0;
+const labels = [];
+const trafficData = [];
+
+// Saldırı istatistikleri
+const attackStats = {};
+const ipStats = {};
+
+// Badge rengi
+function getBadgeClass(type) {
+  if (!type) return 'badge-ddos';
+  const t = type.toLowerCase();
+  if (t.includes('ddos') || t.includes('flood') || t.includes('port')) return 'badge-ddos';
+  if (t.includes('sql')) return 'badge-sqli';
+  if (t.includes('xss')) return 'badge-xss';
+  if (t.includes('lfi') || t.includes('rfi')) return 'badge-lfi';
+  if (t.includes('rce')) return 'badge-rce';
+  if (t.includes('ssrf') || t.includes('xxe')) return 'badge-ssrf';
+  return 'badge-default';
+}
+
+// Trafik grafiği
+const trafficCtx = document.getElementById("trafficChart").getContext("2d");
+const trafficChart = new Chart(trafficCtx, {
+  type: "line",
+  data: {
+    labels,
+    datasets: [{
+      label: "Paket/sn",
+      data: trafficData,
+      borderColor: "#58a6ff",
+      backgroundColor: "rgba(88,166,255,0.1)",
+      tension: 0.4,
+      fill: true
+    }]
+  },
+  options: {
+    responsive: true,
+    animation: false,
+    scales: {
+      x: { ticks: { color: "#7d8590" }, grid: { color: "#1e3a5f" } },
+      y: { ticks: { color: "#7d8590" }, grid: { color: "#1e3a5f" } }
+    },
+    plugins: { legend: { labels: { color: "#e0e6f0" } } }
+  }
+});
+
+// Saldırı türleri pasta grafiği
+const attackCtx = document.getElementById("attackChart").getContext("2d");
+const attackChart = new Chart(attackCtx, {
+  type: "doughnut",
+  data: {
+    labels: [],
+    datasets: [{
+      data: [],
+      backgroundColor: ["#f85149","#58a6ff","#a371f7","#3fb950","#e3b341","#39c5cf","#ff7b72","#79c0ff"],
+      borderWidth: 0
+    }]
+  },
+  options: {
+    responsive: true,
+    plugins: {
+      legend: { labels: { color: "#e0e6f0", font: { size: 11 } } }
+    }
+  }
+});
+
+function updateAttackChart() {
+  attackChart.data.labels = Object.keys(attackStats);
+  attackChart.data.datasets[0].data = Object.values(attackStats);
+  attackChart.update();
+}
+
+function updateIpTable() {
+  const sorted = Object.entries(ipStats).sort((a,b) => b[1].count - a[1].count).slice(0, 5);
+  const tbody = document.getElementById("ip-table-body");
+  if (sorted.length === 0) return;
+  tbody.innerHTML = sorted.map(([ip, data], i) => `
+    <tr>
+      <td class="ip-rank">${i+1}</td>
+      <td style="color:#f85149">${ip}</td>
+      <td>${data.count}</td>
+      <td><span class="badge ${getBadgeClass(data.lastType)}">${data.lastType || 'DDoS'}</span></td>
+    </tr>
+  `).join('');
+}
+
+// Trafik güncelleme
+setInterval(() => {
+  const now = new Date().toLocaleTimeString("tr-TR");
+  labels.push(now);
+  trafficData.push(pktCount);
+  pktCount = 0;
+  if (labels.length > 20) { labels.shift(); trafficData.shift(); }
+  trafficChart.update();
+}, 1000);
+
+socket.on("packet", () => pktCount++);
+
+socket.on("alert", (a) => {
+  // Alert listesi
+  const div = document.getElementById("alerts");
+  const badgeClass = getBadgeClass(a.type);
+  div.innerHTML = `
+    <div class="alert-item">
+      <div>
+        <span class="alert-ip">${a.ip}</span>
+        <span class="badge ${badgeClass}">${a.type || 'DDoS'}</span>
+        <span class="badge badge-default">%${a.risk}</span>
+      </div>
+      <div class="alert-time">${a.time}</div>
+    </div>` + div.innerHTML;
+
+  // İstatistik güncelle
+  const type = a.type || 'DDoS';
+  attackStats[type] = (attackStats[type] || 0) + 1;
+  updateAttackChart();
+
+  // IP istatistik
+  if (!ipStats[a.ip]) ipStats[a.ip] = { count: 0, lastType: type };
+  ipStats[a.ip].count++;
+  ipStats[a.ip].lastType = type;
+  updateIpTable();
+  addMapMarker(a.ip, a.type || 'DDoS');
+});
+
+socket.on("stats", (s) => {
+  document.getElementById("alert-count").textContent = s.alert_count;
+  document.getElementById("banned-count").textContent = s.banned_count;
+  document.getElementById("blocked-count").textContent = s.alert_count;
+});
+
+// Mevcut alertleri yükle
+fetch("/api/alerts").then(r => r.json()).then(alerts => {
+  alerts.forEach(a => {
+    const badgeClass = getBadgeClass(a.type);
+    document.getElementById("alerts").innerHTML += `
+      <div class="alert-item">
+        <div>
+          <span class="alert-ip">${a.ip}</span>
+          <span class="badge ${badgeClass}">${a.type || 'DDoS'}</span>
+          <span class="badge badge-default">%${a.risk}</span>
+        </div>
+        <div class="alert-time">${a.time}</div>
+      </div>`;
+
+    const type = a.type || 'DDoS';
+    attackStats[type] = (attackStats[type] || 0) + 1;
+    if (!ipStats[a.ip]) ipStats[a.ip] = { count: 0, lastType: type };
+    ipStats[a.ip].count++;
+    ipStats[a.ip].lastType = type;
+  });
+  updateAttackChart();
+  updateIpTable();
+});
+</script>
+<div class="section" style="padding: 0 24px 16px;">
+    <div class="card">
+        <h2 style="font-size:12px;color:#7d8590;margin-bottom:12px;text-transform:uppercase;">Canlı Tehdit Haritası</h2>
+        <div id="map"></div>
+    </div>
+</div>
+
+<div class="section" style="padding: 0 24px 24px;">
+  <div class="card">
+    <h2 style="font-size:12px;color:#7d8590;margin-bottom:12px;text-transform:uppercase">Whitelist Yönetimi</h2>
+    <div style="display:flex;gap:8px;margin-bottom:12px">
+      <input id="whitelist-input" type="text" placeholder="IP adresi girin (örn: 192.168.1.1)" 
+        style="flex:1;background:#0a0e1a;border:1px solid #1e3a5f;color:#e0e6f0;padding:8px 12px;border-radius:6px;font-family:monospace;font-size:13px">
+      <button onclick="addWhitelist()" 
+        style="background:#1e3a5f;color:#58a6ff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-family:monospace">
+        + Ekle
+      </button>
+    </div>
+    <div id="whitelist-items"></div>
+  </div>
+</div>
+
+<script>
+// Harita
+const map = L.map('map', { zoomControl: true }).setView([20, 0], 2);
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+  attribution: '© OpenStreetMap © CARTO'
+}).addTo(map);
+
+const redIcon = L.divIcon({
+  html: '<div style="width:12px;height:12px;background:#f85149;border-radius:50%;border:2px solid #ff7b72;box-shadow:0 0 6px #f85149"></div>',
+  iconSize: [12, 12],
+  className: ''
+});
+
+function addMapMarker(ip, type) {
+  fetch(`/api/geoip/${ip}`)
+    .then(r => r.json())
+    .then(data => {
+      if (data.lat && data.lon) {
+        const marker = L.marker([data.lat, data.lon], {icon: redIcon}).addTo(map);
+        marker.bindPopup(`
+          <b style="color:#f85149">${ip}</b><br>
+          ${data.city}, ${data.country}<br>
+          <span style="color:#7d8590">${type}</span>
+        `);
+      }
+    });
+}
+function loadWhitelist() {
+  fetch("/api/whitelist").then(r => r.json()).then(list => {
+    const div = document.getElementById("whitelist-items");
+    div.innerHTML = list.map(ip => `
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 10px;background:#0a0e1a;border-radius:6px;margin-bottom:4px">
+        <span style="color:#3fb950;font-family:monospace">${ip}</span>
+        <button onclick="removeWhitelist('${ip}')" 
+          style="background:#3d1f1f;color:#f85149;border:none;padding:4px 10px;border-radius:4px;cursor:pointer;font-size:11px">
+          Kaldır
+        </button>
+      </div>
+    `).join('');
+  });
+}
+
+function addWhitelist() {
+  const ip = document.getElementById("whitelist-input").value.trim();
+  if (!ip) return;
+  fetch("/api/whitelist/add", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({ip})
+  }).then(r => r.json()).then(() => {
+    document.getElementById("whitelist-input").value = "";
+    loadWhitelist();
+  });
+}
+
+function removeWhitelist(ip) {
+  fetch("/api/whitelist/remove", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({ip})
+  }).then(r => r.json()).then(() => loadWhitelist());
+}
+
+loadWhitelist();
+</script>
+</body>
+</html>

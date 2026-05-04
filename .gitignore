@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+*.pkl
+venv/
+ml/venv/
+data/traffic.csv
+data/normal_traffic.csv
+data/dataset_v2*.csv
+data/attack_new.csv
+*.log
